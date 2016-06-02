@@ -1,0 +1,34 @@
+#!/bin/bash
+# vim:ft=sh 
+
+source pull-dependencies.lib
+
+ensure_dir deps
+ensure_dir bin
+
+# Set up CRF++
+if `download deps https://github.com/taku910/crfpp/archive/master.zip`; then
+  cd deps;
+    if [ ! -e crfpp ]; then
+      unzip master.zip;
+      mv crfpp-master crfpp;
+    fi;
+    cd crfpp;
+      ./configure
+      make
+    cd ..;
+  cd ..;
+  cd bin;
+    ln -s ../deps/crfpp/crf_learn
+    ln -s ../deps/crfpp/crf_test
+  cd ..;
+fi;
+msg "CRF++ setup."
+
+# Set up JAVANLP
+if `download deps http://nlp.stanford.edu/software/stanford-corenlp-full-2015-12-09.zip`; then 
+  cd deps;
+    unzip stanford-corenlp-full-2015-12-09.zip;
+  cd ..
+fi;
+msg "JAVANLP setup."
