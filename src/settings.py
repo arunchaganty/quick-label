@@ -19,3 +19,17 @@ JAVANLP_HOME = os.path.join(ROOT_DIR, 'deps', 'stanford-corenlp')
 # Also update JAVANLP_HOME
 os.environ.update(JAVANLP_HOME=JAVANLP_HOME)
 
+WORK_DIR = "workdir"
+TEMPLATE_PATH = os.path.join(WORK_DIR, "template")
+TRAIN_PATH = os.path.join(WORK_DIR, "train.conll")
+MODEL_PATH = os.path.join(WORK_DIR, "model")
+
+SERVER_URI = "localhost:9000"
+
+KEYS = {
+    's' : 'SPKR',
+    'j' : 'CTNT',
+    'k' : 'CUE',
+    'f' : 'O'
+    }
+

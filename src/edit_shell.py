@@ -1,12 +1,15 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Shell to edit a sequence.
 """
 
-import csv
 import sys
+import math
 import curses
+import curses.textpad
+
+from util import partition
 
 class EditShell(object):
     """
@@ -22,7 +25,6 @@ class EditShell(object):
         self.LINES, self.COLS = self.stdscr.getmaxyx()
 
         self.keys = keys
-
 
     def __enter__(self):
         curses.noecho()
@@ -54,27 +56,43 @@ class EditShell(object):
         @sentence - list[str]
         @tags - list[str]
         """
+        WORD_SPACING = 1
+        TAG_SPACING = 1
+        LINE_SPACING = 1
+        MARGIN = 4
 
-        lines, cols = win.getmaxyx()
+        LINES, COLS = win.getmaxyx()
 
-        spacing = max(map(len, sentence + tags)) + 3
-        total_len = spacing * len(sentence)
+        # If sentence has more than the max col size, identify how many
+        # columns are required to render it.
+        max_tok_len = max(map(len, sentence + tags))
+        hskip =  max_tok_len + WORD_SPACING
+        vskip = 1 + TAG_SPACING + LINE_SPACING
 
-        l1y, l1x = lines / 2 - 1, cols/2 - total_len/2
-        l2y, l2x = lines / 2 + 1, cols/2 - total_len/2
+        COLS_ = min(COLS-MARGIN*2, hskip * len(sentence))
+        LINES_ = math.ceil(hskip * len(sentence) / COLS_) * vskip
 
+        # Setup window
+        begin_y = int(LINES/2 - LINES_/2)
+        begin_x = int(COLS/2  - COLS_/2)
+        win_ = win.subwin(LINES_, COLS_, begin_y, begin_x)
+
+        # Split sentence into groups of COLS_
+        hlim = int(COLS_ / hskip) # Maximum number of characters we can use in a line.
         for i, (word, tag) in enumerate(zip(sentence, tags)):
-            # Highlight i
+            y, x = int(i/hlim) * vskip, (i % hlim) * hskip
+            word_ = word + " " * (max_tok_len - len(word))
+            tag_ = tag + " " * (max_tok_len - len(tag))
 
             if hl is not None and i == hl:
-                flags = curses.color_pair(2) | curses.A_BOLD
+                w_flags = curses.color_pair(3) | curses.A_BOLD
+                t_flags = curses.color_pair(2) | curses.A_BOLD
             else:
-                flags = curses.color_pair(1)
-
-            win.addstr(l1y, l1x + i * spacing, word, flags)
-            win.addstr(l2y, l2x + i * spacing, tag, flags)
-        win.refresh()
-
+                w_flags = curses.color_pair(1)
+                t_flags = curses.color_pair(1)
+            win_.addstr(y  , x, word_, w_flags)
+            win_.addstr(y+1, x,  tag_, t_flags)
+        win_.refresh()
 
     def run(self, sentence, tags):
         """
@@ -82,6 +100,7 @@ class EditShell(object):
         @return sentence, tags -- corrected versions.
         """
         win = self.init_window()
+        text_win = win.subwin(1,80,0,0)
 
         i = 0 # Cursor position
         while i < len(sentence):
@@ -106,18 +125,21 @@ class EditShell(object):
             # <CHAR>  means update tag for current element, next token.
             elif cmd in self.keys:
                 tags[i] = self.keys[cmd]
-                i += 1
+                if i < len(sentence) - 1: # Don't auto-advance past the last token, just in case you want to make an edit.
+                    i += 1
             elif cmd == ':':
                 # Change to echo mode, allow entering command.
-                pass
+                tb = curses.textpad.Textbox(text_win)
+                cmd = tb.edit()
+                win.addstr(1,0, cmd, curses.A_BOLD)
             else:
                 # print error
                 pass
         return sentence, tags
 
-def do_command(args):
+def test_shell():
 
-    sentence = "Calderon said \" I like cheese, \" on Saturday .".split()
+    sentence = "Mexico 's state-owned oil company Petroleos Mexicanos , or Pemex , was bracing for Dean 's arrival into the oil-rich inlet , spokesman Carlos Ramirez said in an e-mail .".split()
     tags = ["O" for _ in sentence]
 
     # A config of tag to shortcut.
@@ -133,9 +155,4 @@ def do_command(args):
     print(tags)
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser( description='' )
-    parser.set_defaults(func=do_command)
-
-    ARGS = parser.parse_args()
-    ARGS.func(ARGS)
+    test_shell()
