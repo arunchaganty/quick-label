@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 """
+import ipdb
 from urllib.parse import urlencode
 from urllib.request import quote
 import subprocess
@@ -19,13 +20,26 @@ def parse_conll(reader):
         # Handling.
         if len(row) == 0:
             if len(current)> 0:
-                yield list(zip(*current))
+                yield current
             current = []
         else:
             current.append(row)
         # End logic
     if len(current) > 0:
-        yield list(zip(*current))
+        yield current
+
+def read_conll_doc(blob):
+    ret = []
+    cur = []
+    for toks in blob.split("\n"):
+        if len(toks) == 0 and len(cur) > 0:
+            ret.append(cur)
+            cur = []
+        elif len(toks) > 0:
+            feats = toks.split("\t")
+            assert len(feats)
+            cur.append(feats)
+    return ret
 
 def sentence_to_conll(ostream, sentence):
     """
@@ -39,13 +53,19 @@ def sentence_to_conll(ostream, sentence):
             row.append(token["_tag"])
         writer.writerow(row)
 
+def write_conll(ostream, conll):
+    """
+    Output sentence to conll format
+    """
+    ostream.writelines(['\t'.join(fields) + "\n" for fields in conll] + ["\n"])
+
 def __call_server(doc, props, uri=SERVER_URI):
     """
     Calls a remote server to annotate doc
     """
     # Save doc in a temporary file.
     if len(props) > 0:
-        uri = "%s?%s"%(uri, urlencode({"properties" : json.dumps(props)}))
+        uri = "%s?%s"%(uri, urlencode({"outputFormat":"conll", "properties" : json.dumps(props)}))
     else:
         uri = uri
     return subprocess.check_output(["curl", uri, "--data", quote(doc)], stderr=subprocess.DEVNULL).decode()
@@ -55,15 +75,18 @@ def annotate_doc(doc):
     Annotate
     """
     props = {"annotators":"tokenize,ssplit,lemma,pos"}
-    return json.loads(__call_server(doc, props))
+    ret = __call_server(doc, props)
+    conll = read_conll_doc(ret)
+    # Simplify conll; only take columns 2, 3, 4
+    return [[tok[1:4] for tok in sentence] for sentence in conll]
 
 def annotate_sentence(sentence):
     """
     Annotate a sentence (simpler return)
     """
-    obj = annotate_doc(sentence)
-    assert len(obj["sentences"]) == 1
-    return obj["sentences"][0]
+    doc = annotate_doc(sentence)
+    assert len(doc) == 1
+    return doc[0]
 
 def partition(lst, length):
     """
