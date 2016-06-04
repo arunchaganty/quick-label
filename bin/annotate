@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+This python script allows you to easily annotate snippets of text.
+The preferred mode of execution is to use --use-server which will force
+a server to be created (either localhost or at the provided inet
+address).
+"""
+import os
+import sys
+import subprocess
+import json
+from urllib.parse import urlencode
+from urllib.request import quote
+
+JAVANLP_PID='/tmp/javanlp-server.pid'
+
+# Shell colors.
+class bcolors:
+    """Terminal colors"""
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def fatal(msg):
+    """Print an error message"""
+    err(msg)
+    sys.exit(1)
+
+def err(msg):
+    """Print an error message"""
+    sys.stderr.write(bcolors.FAIL + msg + bcolors.ENDC + "\n")
+
+def warn(msg):
+    """Print a warning message"""
+    sys.stderr.write(bcolors.WARNING + msg + bcolors.ENDC + "\n")
+
+def ok(msg):
+    """Print an ok status message"""
+    sys.stderr.write(bcolors.OKGREEN + msg + bcolors.ENDC + "\n")
+
+def kill_server(args):
+    """Check that a pid file exists and attempt to kill a process"""
+    # Check that the pid file exists.
+    if not os.path.exists(args.pid_file):
+        fatal("Could not find pid file at path: " + args.pid_file + ". You may need to kill the process manually.")
+    try:
+        with open(args.pid_file, 'r') as f:
+            pid = f.read().strip()
+        subprocess.call(["kill", pid])
+        ok("Successfully terminated server.")
+        subprocess.call(["rm", args.pid_file])
+        return True
+    except Exception as _:
+        fatal("Could not terminate server using pid at path: " + args.pid_file + ". You may need to kill the process manually.")
+
+def check_server(args):
+    """Check that the server is running"""
+    # Try to ping the server.
+    try:
+        response = subprocess.check_output(['curl', '%s/ping' % (args.use_server)], stderr=subprocess.DEVNULL).decode()
+        assert response == 'pong\n'
+        return True
+    except AssertionError:
+        err("Received reply: " + response)
+        fatal("A non-JavaNLP server is running at the address: " + args.use_server)
+    except subprocess.CalledProcessError:
+        return False
+
+def is_local(hostname):
+    """Check if this is a local server"""
+    # TODO: Use a more legit way of checking for localhost.
+    return hostname == "localhost" or hostname == "127.0.0.1"
+
+def ensure_server(args):
+    """Check that the server is running, and if not attempt to start it"""
+
+    # Try to start the server (locally).
+    try:
+        host, port = args.use_server.split(":")
+        timeout = args.timeout
+    except ValueError:
+        fatal("Server address doesn't make sense: " + args.use_server)
+
+    # Try to ping the server.
+    if check_server(args):
+        return True
+
+    if not is_local(host):
+        fatal("Could not find a JavaNLP server at remote address: " + args.use_server)
+    else:
+        # Try to spawn a server.
+        # Verify that JAVANLP_HOME is set.
+        if not os.getenv("JAVANLP_HOME"):
+            err("JAVANLP_HOME is not set. Please set it to the path of your JAVANLP checkout (preferably in your bashrc)")
+            return False
+        if not os.getenv("CLASSPATH"):
+            err("CLASSPATH is not set, so probably doesn't contain path to the JAVANLP models. Please set it to the path of your models (preferably in your bashrc)")
+            return False
+
+        javanlp = os.path.join(os.getenv("JAVANLP_HOME"), "bin", "javanlp.sh")
+        p = subprocess.Popen([javanlp, "edu.stanford.nlp.pipeline.StanfordCoreNLPServer", "-port", port, "-timeout", str(timeout)])
+        ok(str(p.args))
+
+        ok(str(p.pid))
+        ok(str(p.returncode))
+
+        if p.poll() is not None:
+            fatal("Server terminated early with code: " + p.returncode)
+
+        try:
+            # Write the pid to a file.
+            with open(args.pid_file, "w") as f:
+                f.write(str(p.pid))
+
+            ok("Started server at " + args.use_server)
+            return True
+
+        except Exception as e:
+            err(str(e))
+            p.kill()
+            fatal("Error starting server")
+
+def call_server(args, doc, props):
+    """
+    Calls a remote server to annotate doc
+    """
+    # Save doc in a temporary file.
+    if len(props) > 0:
+        uri = "%s?%s"%(args.use_server, urlencode({"properties" : json.dumps(props)}))
+    else:
+        uri = args.use_server
+    ok("Requesting " + uri)
+    try:
+        return subprocess.check_output(["curl", uri, "--data", quote(doc)], stderr=subprocess.DEVNULL).decode()
+    except subprocess.CalledProcessError:
+        err("Error calling process")
+        return None
+
+def call_java(args, doc, props):
+    raise NotImplementedError("Just call bin/javanlp.sh edu.stanford.nlp.StanfordCoreNLP")
+
+def do_command(args):
+    """
+    Workhorse.
+    """
+    if args.kill_server:
+        return kill_server(args)
+
+    # Get script call.
+    if args.use_server and not ensure_server(args):
+        sys.exit(1)
+
+    annotate_fn = call_server if args.use_server else call_java
+
+    # Get props from args
+    props = {key : value for (key, value) in map(lambda x: x.split("="), args.properties)}
+
+    if args.document:
+        # Get the whole document.
+        doc = args.input.read()
+        output = annotate_fn(args, doc, props)
+        if output is not None:
+            args.output.write(output + "\n")
+    else:
+        for doc in args.input:
+            output = annotate_fn(args, doc, props)
+            if output is not None:
+                args.output.write(output + "\n")
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser( description="""Ensures a javanlp\
+ server is running and provides an interface to stream\
+ sentences as input, receiving json as output.""" )
+    parser.add_argument('-u', '--use-server', action='store_const', const="localhost:9000", help="Uses a server to parse the input document" )
+    parser.add_argument('-t', '--timeout', default=2500, type=int, help="How many milliseconds to wait for" )
+    parser.add_argument('-k', '--kill-server', action='store_true', default=False, help="Kill a running server and stop" )
+    parser.add_argument('-d', '--document', action='store_true', default=False, help="Treats the whole input as a single document (default is a document per line)" )
+    parser.add_argument('-i', '--input', type=argparse.FileType('r'), default=sys.stdin, help="Input source (default is stdin)" )
+    parser.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout, help="Output sink (default is stdout)" )
+    parser.add_argument('--pid-file', type=str, default=JAVANLP_PID, help="Path to server pid -- don't change unless you know what you are doing.")
+    parser.add_argument('properties', type=str, nargs="*", help="List of key=value pairs that is passed as properties to the annotator.")
+    parser.set_defaults(func=do_command)
+
+    ARGS = parser.parse_args()
+    ARGS.func(ARGS) # Return the right exit code
+
