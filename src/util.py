@@ -98,3 +98,25 @@ def partition(lst, length):
         yield i, lst[j:j+length]
         i += 1
 
+def get_longest_span(lst, item):
+    """
+    Find the longest span of the item in the lst.
+    """
+    begin, end, max_len = None, None, 0
+    begin_, end_ = None, None
+    for i, item_ in enumerate(lst):
+        if item == item_ and begin_ is None:
+            begin_ = i
+        elif item != item_ and begin_ is not None:
+            end_ = i
+            if (end_ - begin_) > max_len:
+                begin, end, max_len = begin_, end_, (end_ - begin_)
+            begin_, end_ = None, None
+    if begin_ is not None:
+        end_ = len(lst)
+        if (end_ - begin_) > max_len:
+            begin, end, max_len = begin_, end_, (end_ - begin_)
+        begin_, end_ = None, None
+
+    return begin, end
+

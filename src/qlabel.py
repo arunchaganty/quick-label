@@ -5,10 +5,15 @@ The QuickLabel entry point
 """
 
 from __future__ import division
+import csv
+from collections import namedtuple
+from configparser import ConfigParser
+
 from crf import CRF
 from edit_shell import EditShell, QuitException
 from data_store import DataStore
-from configparser import ConfigParser
+from util import get_longest_span
+from pgutil import parse_psql_array
 
 def render_progress(data, accuracy):
     """
@@ -25,7 +30,7 @@ def score(guess, gold):
     """Compute just tag accuracy"""
     return sum(1 for tag, tag_ in zip(guess, gold) if tag == tag_)/len(guess)
 
-def do_command(args):
+def do_train(args):
     # Load configuration
     config = ConfigParser()
     config.read_file(args.config)
@@ -78,11 +83,80 @@ def do_command(args):
             except QuitException:
                 break
 
+def extract_quote_entries(sentence, tags):
+    """
+    Extract the quote entries from the sentence.
+    """
+    gloss = sentence.gloss
+    doc_char_begin = list(map(int, parse_psql_array(sentence.doc_char_begin)))
+    doc_char_end = list(map(int, parse_psql_array(sentence.doc_char_end)))
+
+    # Parse the speaker tags.
+    speaker_start, speaker_end = get_longest_span(tags, "SPKR")
+    cue_start, cue_end = get_longest_span(tags, "CUE")
+    content_tokens = [i for i, tag in enumerate(tags) if tag == "CTNT"]
+    content_start, content_end = min(content_tokens), max(content_tokens)
+    # Get character offsets.
+    assert speaker_start is not None
+    assert content_start is not None
+    offset = doc_char_begin[0]
+    speaker = gloss[doc_char_begin[speaker_start]-offset:doc_char_end[speaker_end]-offset]
+    content = gloss[doc_char_begin[content_start]-offset:doc_char_end[content_end]-offset]
+    if cue_start is not None:
+        cue = gloss[doc_char_begin[cue_start]-offset:doc_char_end[cue_end]-offset]
+    else:
+        cue = None
+
+    return (speaker_start, speaker_end,
+            cue_start, cue_end,
+            content_start, content_end, content_tokens,
+            speaker, cue, content)
+
+
+def do_infer(args):
+    config = ConfigParser()
+    config.read_file(args.config)
+    model = CRF(config)
+
+    writer = csv.writer(args.output, delimiter='\t')
+    reader = csv.reader(args.input, delimiter='\t')
+    header = next(reader)
+    #if args.has_annotations:
+    assert all(w in header for w in ["id", "words", "lemmas", "pos_tags", "doc_char_begin", "doc_char_end", "gloss"]), "Input doesn't have required annotations."
+    #else:
+    #    assert all(w in header for w in ["id", "text"]), "Input doesn't have ids."
+
+    writer.writerow([
+        'id',
+        'speaker_start', 'speaker_end',
+        'cue_start', 'cue_end',
+        'content_start', 'content_end', 'content_tokens',
+        'speaker', 'cue', 'content'])
+    Sentence = namedtuple('Sentence', header)
+    for row in reader:
+        assert len(row) == len(header), "Row did not have enough fields: " + row
+        sentence = Sentence(*row)
+        words, lemmas, pos_tags = [parse_psql_array(arr) for arr in (sentence.words, sentence.lemmas, sentence.pos_tags)]
+        conll = zip(words, lemmas, pos_tags)
+        tags = model.infer(conll)
+        if "SPKR" not in tags or "CTNT" not in tags: continue
+        writer.writerow((sentence.id,) + extract_quote_entries(sentence, tags))
+
 if __name__ == "__main__":
+    import sys
     import argparse
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('config', type=argparse.FileType('r'),  help="Path to configuration file")
-    parser.set_defaults(func=do_command)
+    parser.add_argument('--config', type=argparse.FileType('r'),  help="Path to configuration file")
+
+    subparsers = parser.add_subparsers()
+    command_parser = subparsers.add_parser('train', help='Opens the training interface')
+    command_parser.set_defaults(func=do_train)
+
+    command_parser = subparsers.add_parser('infer', help='Uses the trained model to evaluate new sentences')
+    command_parser.add_argument('--input', type=argparse.FileType('r'), default=sys.stdin, help="Input")
+    #command_parser.add_argument('--has_annotations', action='store_true', default=False, help="Does the input have annotations?")
+    command_parser.add_argument('--output', type=argparse.FileType('w'), default=sys.stdout, help="Output")
+    command_parser.set_defaults(func=do_infer)
 
     ARGS = parser.parse_args()
     ARGS.func(ARGS)
