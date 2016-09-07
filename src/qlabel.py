@@ -13,7 +13,7 @@ from crf import CRF
 from edit_shell import EditShell, QuitException
 from data_store import DataStore
 from util import get_longest_span
-from pgutil import parse_psql_array
+from pgutil import parse_psql_array, to_psql_array
 
 def render_progress(data, accuracy):
     """
@@ -100,18 +100,17 @@ def extract_quote_entries(sentence, tags):
     assert speaker_start is not None
     assert content_start is not None
     offset = doc_char_begin[0]
-    speaker = gloss[doc_char_begin[speaker_start]-offset:doc_char_end[speaker_end]-offset]
-    content = gloss[doc_char_begin[content_start]-offset:doc_char_end[content_end]-offset]
+    speaker = gloss[doc_char_begin[speaker_start]-offset:doc_char_end[speaker_end-1]-offset+1]
+    content = gloss[doc_char_begin[content_start]-offset:doc_char_end[content_end-1]-offset+1]
     if cue_start is not None:
-        cue = gloss[doc_char_begin[cue_start]-offset:doc_char_end[cue_end]-offset]
+        cue = gloss[doc_char_begin[cue_start]-offset:doc_char_end[cue_end-1]-offset+1]
     else:
         cue = None
 
     return (speaker_start, speaker_end,
             cue_start, cue_end,
-            content_start, content_end, content_tokens,
+            content_start, content_end, to_psql_array(map(str,content_tokens)),
             speaker, cue, content)
-
 
 def do_infer(args):
     config = ConfigParser()
