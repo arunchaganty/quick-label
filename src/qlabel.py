@@ -6,6 +6,7 @@ The QuickLabel entry point
 
 from __future__ import division
 import csv
+from itertools import islice
 from collections import namedtuple
 from configparser import ConfigParser
 
@@ -13,7 +14,15 @@ from crf import CRF
 from edit_shell import EditShell, QuitException
 from data_store import DataStore
 from util import get_longest_span
+from tqdm import tqdm
 from pgutil import parse_psql_array, to_psql_array
+
+def batch(lst, batch_size):
+    while True:
+        try:
+            yield islice(lst, batch_size)
+        except StopIteration:
+            break
 
 def render_progress(data, accuracy):
     """
@@ -125,20 +134,29 @@ def do_infer(args):
     config.read_file(args.config)
     model = CRF(config)
 
-    writer = csv.writer(args.output, delimiter='\t')
     reader = csv.reader(args.input, delimiter='\t')
     header = next(reader)
-    #if args.has_annotations:
     assert all(w in header for w in ["id", "words", "lemmas", "pos_tags", "doc_char_begin", "doc_char_end", "gloss"]), "Input doesn't have required annotations."
-    #else:
-    #    assert all(w in header for w in ["id", "text"]), "Input doesn't have ids."
+    Sentence = namedtuple('Sentence', header)
 
+    def parse_input(row):
+        sentence = Sentence(*row)
+        words, lemmas, pos_tags = [parse_psql_array(arr) for arr in (sentence.words, sentence.lemmas, sentence.pos_tags)]
+        return sentence._replace(words=words, lemmas=lemmas, pos_tags=pos_tags)
+
+    writer = csv.writer(args.output, delimiter='\t')
     writer.writerow([
         'id',
         'speaker_token_begin', 'speaker_token_end',
         'cue_token_begin', 'cue_token_end',
         'content_token_begin', 'content_token_end', 'content_tokens',
         'speaker', 'cue', 'content'])
+
+    for sentences in tqdm(batch(map(parse_input, reader), args.batch_size)):
+        conll = [zip(s.words, s.lemmas, s.pos_tags) for s in sentences]
+        for sentence, tags in zip(sentences, model.infer(conll)):
+            writer.writerow((sentence.id,) + extract_quote_entries(sentence, tags))
+
     Sentence = namedtuple('Sentence', header)
     for row in reader:
         assert len(row) == len(header), "Row did not have enough fields: " + row
@@ -162,6 +180,7 @@ if __name__ == "__main__":
     command_parser.set_defaults(func=do_train)
 
     command_parser = subparsers.add_parser('infer', help='Uses the trained model to evaluate new sentences')
+    command_parser.add_argument('--batch_size', type=int, default=1000, help="Batch input to be sent to CRF.")
     command_parser.add_argument('--input', type=argparse.FileType('r'), default=sys.stdin, help="Input")
     #command_parser.add_argument('--has_annotations', action='store_true', default=False, help="Does the input have annotations?")
     command_parser.add_argument('--output', type=argparse.FileType('w'), default=sys.stdout, help="Output")

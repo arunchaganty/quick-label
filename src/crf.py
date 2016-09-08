@@ -25,16 +25,18 @@ class CRF(object):
     def infer(self, conll):
         """
         Uses the JAVANLP sentence object to create an appropriate CoNLL formatted input for the CRF
+        CONLL is a list of arrays.
+        @param: conll is a set of strings.
         """
         with open(self.test_path, "w") as f:
-            write_conll(f, conll)
+            for conll_ in conll:
+                write_conll(f, conll_)
+                f.write("\n")
 
         output = check_output([CRF_TEST, "-m", self.model_path, self.test_path], universal_newlines=True)
-        conll = read_conll_doc(output)
-        assert len(conll) == 1
-        conll = conll[0]
-
-        tags = [tok[-1] for tok in conll]
+        conll_out = read_conll_doc(output)
+        assert len(conll_out) == len(conll)
+        tags = [[tok[-1] for tok in c] for c in conll_out]
         return tags
 
     def retrain(self):
@@ -57,7 +59,7 @@ def test_infer():
 
     line = 'Calderon praised Medina Mora for his "professionalism" which he said was "crucial for the procurement of justice and to strike at organized crime.'
     conll = annotate_sentence(line)
-    tags = model.infer(conll)
+    tags = model.infer([conll, conll])
     print(tags)
 
 if __name__ == "__main__":
