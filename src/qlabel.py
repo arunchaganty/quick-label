@@ -83,14 +83,23 @@ def do_train(args):
             except QuitException:
                 break
 
+def reconstruct_gloss(sentence, token_begin, token_end):
+    """
+    Reconstruct a sentence gloss from a token span.
+    """
+    ret = ""
+    for i in range(token_begin, token_end):
+        ret += sentence.words[i]
+        if i == token_end-1:
+            pass
+        elif sentence.doc_char_end[i] != sentence.doc_char_begin[i+1]:
+            ret += " "
+    return ret
+
 def extract_quote_entries(sentence, tags):
     """
     Extract the quote entries from the sentence.
     """
-    gloss = sentence.gloss
-    doc_char_begin = list(map(int, parse_psql_array(sentence.doc_char_begin)))
-    doc_char_end = list(map(int, parse_psql_array(sentence.doc_char_end)))
-
     # Parse the speaker tags.
     speaker_start, speaker_end = get_longest_span(tags, "SPKR")
     cue_start, cue_end = get_longest_span(tags, "CUE")
@@ -99,11 +108,10 @@ def extract_quote_entries(sentence, tags):
     # Get character offsets.
     assert speaker_start is not None
     assert content_start is not None
-    offset = doc_char_begin[0]
-    speaker = gloss[doc_char_begin[speaker_start]-offset:doc_char_end[speaker_end-1]-offset+1]
-    content = gloss[doc_char_begin[content_start]-offset:doc_char_end[content_end-1]-offset+1]
+    speaker = reconstruct_gloss(sentence, speaker_start, speaker_end)
+    content =  reconstruct_gloss(sentence, content_start, content_end)
     if cue_start is not None:
-        cue = gloss[doc_char_begin[cue_start]-offset:doc_char_end[cue_end-1]-offset+1]
+        cue = reconstruct_gloss(sentence, cue_start, cue_end)
     else:
         cue = None
 
@@ -127,15 +135,17 @@ def do_infer(args):
 
     writer.writerow([
         'id',
-        'speaker_start', 'speaker_end',
-        'cue_start', 'cue_end',
-        'content_start', 'content_end', 'content_tokens',
+        'speaker_token_begin', 'speaker_token_end',
+        'cue_token_begin', 'cue_token_end',
+        'content_token_begin', 'content_token_end', 'content_tokens',
         'speaker', 'cue', 'content'])
     Sentence = namedtuple('Sentence', header)
     for row in reader:
         assert len(row) == len(header), "Row did not have enough fields: " + row
         sentence = Sentence(*row)
         words, lemmas, pos_tags = [parse_psql_array(arr) for arr in (sentence.words, sentence.lemmas, sentence.pos_tags)]
+        sentence = sentence._replace(words=words, lemmas=lemmas, pos_tags=pos_tags)
+
         conll = zip(words, lemmas, pos_tags)
         tags = model.infer(conll)
         if "SPKR" not in tags or "CTNT" not in tags: continue
