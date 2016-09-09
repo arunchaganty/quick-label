@@ -17,12 +17,11 @@ from util import get_longest_span
 from tqdm import tqdm
 from pgutil import parse_psql_array, to_psql_array
 
-def batch(lst, batch_size):
-    while True:
-        try:
-            yield islice(lst, batch_size)
-        except StopIteration:
-            break
+def grouper(iterable, n):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx"
+    args = [iter(iterable)] * n
+    return zip(*args)
 
 def render_progress(data, accuracy):
     """
@@ -124,10 +123,10 @@ def extract_quote_entries(sentence, tags):
     else:
         cue = None
 
-    return (speaker_start, speaker_end,
+    return [speaker_start, speaker_end,
             cue_start, cue_end,
             content_start, content_end, to_psql_array(map(str,content_tokens)),
-            speaker, cue, content)
+            speaker, cue, content]
 
 def do_infer(args):
     config = ConfigParser()
@@ -152,22 +151,11 @@ def do_infer(args):
         'content_token_begin', 'content_token_end', 'content_tokens',
         'speaker', 'cue', 'content'])
 
-    for sentences in tqdm(batch(map(parse_input, reader), args.batch_size)):
+    for sentences in tqdm(grouper(map(parse_input, reader), args.batch_size)):
         conll = [zip(s.words, s.lemmas, s.pos_tags) for s in sentences]
         for sentence, tags in zip(sentences, model.infer(conll)):
-            writer.writerow((sentence.id,) + extract_quote_entries(sentence, tags))
-
-    Sentence = namedtuple('Sentence', header)
-    for row in reader:
-        assert len(row) == len(header), "Row did not have enough fields: " + row
-        sentence = Sentence(*row)
-        words, lemmas, pos_tags = [parse_psql_array(arr) for arr in (sentence.words, sentence.lemmas, sentence.pos_tags)]
-        sentence = sentence._replace(words=words, lemmas=lemmas, pos_tags=pos_tags)
-
-        conll = zip(words, lemmas, pos_tags)
-        tags = model.infer(conll)
-        if "SPKR" not in tags or "CTNT" not in tags: continue
-        writer.writerow((sentence.id,) + extract_quote_entries(sentence, tags))
+            if "SPKR" not in tags or "CTNT" not in tags: continue
+            writer.writerow([sentence.id,] + extract_quote_entries(sentence, tags))
 
 if __name__ == "__main__":
     import sys
@@ -181,6 +169,7 @@ if __name__ == "__main__":
 
     command_parser = subparsers.add_parser('infer', help='Uses the trained model to evaluate new sentences')
     command_parser.add_argument('--batch_size', type=int, default=1000, help="Batch input to be sent to CRF.")
+
     command_parser.add_argument('--input', type=argparse.FileType('r'), default=sys.stdin, help="Input")
     #command_parser.add_argument('--has_annotations', action='store_true', default=False, help="Does the input have annotations?")
     command_parser.add_argument('--output', type=argparse.FileType('w'), default=sys.stdout, help="Output")
